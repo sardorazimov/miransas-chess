@@ -80,6 +80,18 @@ pub fn generate_pseudo_legal_moves(board: &Board) -> Vec<Move> {
     moves
 }
 
+pub fn generate_legal_moves(board: &Board) -> Vec<Move> {
+    let us = board.side_to_move;
+
+    generate_pseudo_legal_moves(board)
+        .into_iter()
+        .filter(|&mv| {
+            let next_board = board.make_move_unchecked(mv);
+            !is_in_check(&next_board, us)
+        })
+        .collect()
+}
+
 pub fn generate_pseudo_legal_moves_from_square(board: &Board, from: Square) -> Vec<Move> {
     let mut moves = Vec::new();
     let Some(piece) = board.piece_at(from) else {
@@ -408,5 +420,47 @@ mod tests {
         let board = Board::from_fen("4k3/8/8/8/8/8/4p3/4R3 b - - 0 1").expect("valid FEN");
 
         assert!(!is_in_check(&board, Color::Black));
+    }
+
+    #[test]
+    fn startpos_has_twenty_legal_moves() {
+        let board = Board::startpos();
+
+        assert_eq!(generate_legal_moves(&board).len(), 20);
+    }
+
+    #[test]
+    fn checked_king_legal_moves_all_resolve_check() {
+        let board = Board::from_fen("4k3/8/8/8/8/8/4r3/4K3 w - - 0 1").expect("valid FEN");
+        let moves = generate_legal_moves(&board);
+
+        assert!(!moves.is_empty());
+        assert!(
+            moves
+                .into_iter()
+                .all(|mv| !is_in_check(&board.make_move_unchecked(mv), Color::White))
+        );
+    }
+
+    #[test]
+    fn pinned_rook_cannot_move_off_file() {
+        let board = Board::from_fen("4r3/8/8/8/8/8/4R3/4K3 w - - 0 1").expect("valid FEN");
+        let rook_square = Square::from_algebraic("e2").expect("valid square");
+        let legal_rook_moves: Vec<_> = generate_legal_moves(&board)
+            .into_iter()
+            .filter(|mv| mv.from == rook_square)
+            .collect();
+
+        assert!(!legal_rook_moves.is_empty());
+        assert!(
+            legal_rook_moves
+                .iter()
+                .all(|mv| mv.to.file() == rook_square.file())
+        );
+        assert!(
+            legal_rook_moves
+                .into_iter()
+                .all(|mv| !is_in_check(&board.make_move_unchecked(mv), Color::White))
+        );
     }
 }
