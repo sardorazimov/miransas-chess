@@ -52,5 +52,6 @@ mod tests {
         assert_eq!(perft_legal(&board, 1), 20);
         assert_eq!(perft_legal(&board, 2), 400);
         assert_eq!(perft_legal(&board, 3), 8902);
+        assert_eq!(perft_legal(&board, 4), 197281);
     }
 }

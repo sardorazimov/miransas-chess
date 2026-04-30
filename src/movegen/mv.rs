@@ -2,6 +2,12 @@ use std::fmt;
 
 use crate::board::{Board, Color, PieceKind, Square};
 
+const PROMOTION_PIECES: [PieceKind; 4] = [
+    PieceKind::Queen,
+    PieceKind::Rook,
+    PieceKind::Bishop,
+    PieceKind::Knight,
+];
 const ROOK_DIRECTIONS: [(i8, i8); 4] = [(1, 0), (-1, 0), (0, 1), (0, -1)];
 const BISHOP_DIRECTIONS: [(i8, i8); 4] = [(1, 1), (1, -1), (-1, 1), (-1, -1)];
 const QUEEN_DIRECTIONS: [(i8, i8); 8] = [
@@ -245,7 +251,11 @@ fn is_attacked_by_slider(
                 continue;
             };
 
-            return piece.color == by_color && attackers.contains(&piece.kind);
+            if piece.color == by_color && attackers.contains(&piece.kind) {
+                return true;
+            }
+
+            break;
         }
     }
 
@@ -275,14 +285,26 @@ fn generate_pawn_moves(board: &Board, from: Square, color: Color, moves: &mut Ve
         }
     }
 
-    // Pawn captures only exist when an opposing piece is present. En passant is intentionally
-    // left out of this foundational generator.
     for file_delta in [-1, 1] {
         if let Some(to) = offset_square(from, file_delta, direction)
             && let Some(target) = board.piece_at(to)
             && target.color != color
         {
             push_pawn_move(from, to, color, moves);
+        }
+    }
+
+    if let Some(en_passant) = board.en_passant {
+        let (pawn_rank, en_passant_rank) = match color {
+            Color::White => (4, 5),
+            Color::Black => (3, 2),
+        };
+
+        if from.rank() == pawn_rank
+            && (from.file() as i8 - en_passant.file() as i8).abs() == 1
+            && en_passant.rank() == en_passant_rank
+        {
+            moves.push(Move::new(from, en_passant));
         }
     }
 }
@@ -293,6 +315,69 @@ fn generate_knight_moves(board: &Board, from: Square, color: Color, moves: &mut 
 
 fn generate_king_moves(board: &Board, from: Square, color: Color, moves: &mut Vec<Move>) {
     generate_leaper_moves(board, from, color, &KING_ATTACK_DELTAS, moves);
+    generate_castling_moves(board, from, color, moves);
+}
+
+fn generate_castling_moves(board: &Board, from: Square, color: Color, moves: &mut Vec<Move>) {
+    let opponent = color.opposite();
+    if is_square_attacked(board, from, opponent) {
+        return;
+    }
+
+    match color {
+        Color::White if from == square("e1") => {
+            if board.castling_rights.white_kingside
+                && can_castle(board, color, square("h1"), &[square("f1"), square("g1")])
+                && !is_square_attacked(board, square("f1"), opponent)
+                && !is_square_attacked(board, square("g1"), opponent)
+            {
+                moves.push(Move::new(from, square("g1")));
+            }
+            if board.castling_rights.white_queenside
+                && can_castle(
+                    board,
+                    color,
+                    square("a1"),
+                    &[square("b1"), square("c1"), square("d1")],
+                )
+                && !is_square_attacked(board, square("d1"), opponent)
+                && !is_square_attacked(board, square("c1"), opponent)
+            {
+                moves.push(Move::new(from, square("c1")));
+            }
+        }
+        Color::Black if from == square("e8") => {
+            if board.castling_rights.black_kingside
+                && can_castle(board, color, square("h8"), &[square("f8"), square("g8")])
+                && !is_square_attacked(board, square("f8"), opponent)
+                && !is_square_attacked(board, square("g8"), opponent)
+            {
+                moves.push(Move::new(from, square("g8")));
+            }
+            if board.castling_rights.black_queenside
+                && can_castle(
+                    board,
+                    color,
+                    square("a8"),
+                    &[square("b8"), square("c8"), square("d8")],
+                )
+                && !is_square_attacked(board, square("d8"), opponent)
+                && !is_square_attacked(board, square("c8"), opponent)
+            {
+                moves.push(Move::new(from, square("c8")));
+            }
+        }
+        _ => {}
+    }
+}
+
+fn can_castle(board: &Board, color: Color, rook_square: Square, empty_squares: &[Square]) -> bool {
+    board
+        .piece_at(rook_square)
+        .is_some_and(|piece| piece.color == color && piece.kind == PieceKind::Rook)
+        && empty_squares
+            .iter()
+            .all(|&square| board.piece_at(square).is_none())
 }
 
 fn generate_leaper_moves(
@@ -318,10 +403,16 @@ fn push_pawn_move(from: Square, to: Square, color: Color, moves: &mut Vec<Move>)
     };
 
     if to.rank() == promotion_rank {
-        moves.push(Move::promotion(from, to, PieceKind::Queen));
+        for promotion in PROMOTION_PIECES {
+            moves.push(Move::promotion(from, to, promotion));
+        }
     } else {
         moves.push(Move::new(from, to));
     }
+}
+
+fn square(algebraic: &str) -> Square {
+    Square::from_algebraic(algebraic).expect("hard-coded square is valid")
 }
 
 fn offset_square(square: Square, file_delta: i8, rank_delta: i8) -> Option<Square> {
@@ -462,5 +553,124 @@ mod tests {
                 .into_iter()
                 .all(|mv| !is_in_check(&board.make_move_unchecked(mv), Color::White))
         );
+    }
+
+    #[test]
+    fn white_pawn_promotes_to_all_piece_types() {
+        let board = Board::from_fen("8/P7/8/8/8/8/8/4K3 w - - 0 1").expect("valid FEN");
+        let from = square("a7");
+        let to = square("a8");
+
+        assert_promotions(&generate_pseudo_legal_moves(&board), from, to);
+    }
+
+    #[test]
+    fn black_pawn_promotes_to_all_piece_types() {
+        let board = Board::from_fen("4k3/8/8/8/8/8/7p/8 b - - 0 1").expect("valid FEN");
+        let from = square("h2");
+        let to = square("h1");
+
+        assert_promotions(&generate_pseudo_legal_moves(&board), from, to);
+    }
+
+    #[test]
+    fn promotion_capture_generates_all_piece_types() {
+        let board = Board::from_fen("1r6/P7/8/8/8/8/8/4K3 w - - 0 1").expect("valid FEN");
+        let from = square("a7");
+        let to = square("b8");
+
+        assert_promotions(&generate_pseudo_legal_moves(&board), from, to);
+    }
+
+    #[test]
+    fn promotion_move_replaces_pawn_with_promoted_piece() {
+        let board = Board::from_fen("8/P7/8/8/8/8/8/4K3 w - - 0 1").expect("valid FEN");
+        let next = board.make_move_unchecked(Move::promotion(
+            square("a7"),
+            square("a8"),
+            PieceKind::Knight,
+        ));
+
+        assert_eq!(next.piece_at(square("a7")), None);
+        assert_eq!(
+            next.piece_at(square("a8")).map(|piece| piece.kind),
+            Some(PieceKind::Knight)
+        );
+    }
+
+    #[test]
+    fn white_en_passant_is_generated_and_removes_captured_pawn() {
+        let board = Board::from_fen("8/8/8/3pP3/8/8/8/4K3 w - d6 0 1").expect("valid FEN");
+        let mv = Move::new(square("e5"), square("d6"));
+
+        assert!(generate_pseudo_legal_moves(&board).contains(&mv));
+
+        let next = board.make_move_unchecked(mv);
+        assert_eq!(next.piece_at(square("e5")), None);
+        assert_eq!(next.piece_at(square("d5")), None);
+        assert_eq!(
+            next.piece_at(square("d6")).map(|piece| piece.kind),
+            Some(PieceKind::Pawn)
+        );
+    }
+
+    #[test]
+    fn en_passant_exposing_king_to_rook_is_not_legal() {
+        let board = Board::from_fen("8/8/8/r2pP2K/8/8/8/8 w - d6 0 1").expect("valid FEN");
+        let mv = Move::new(square("e5"), square("d6"));
+
+        assert!(generate_pseudo_legal_moves(&board).contains(&mv));
+        assert!(!generate_legal_moves(&board).contains(&mv));
+    }
+
+    #[test]
+    fn empty_castling_position_generates_both_white_castles() {
+        let board = Board::from_fen("r3k2r/8/8/8/8/8/8/R3K2R w KQkq - 0 1").expect("valid FEN");
+        let moves = generate_legal_moves(&board);
+
+        assert!(moves.contains(&Move::new(square("e1"), square("g1"))));
+        assert!(moves.contains(&Move::new(square("e1"), square("c1"))));
+    }
+
+    #[test]
+    fn empty_castling_position_generates_both_black_castles() {
+        let board = Board::from_fen("r3k2r/8/8/8/8/8/8/R3K2R b KQkq - 0 1").expect("valid FEN");
+        let moves = generate_legal_moves(&board);
+
+        assert!(moves.contains(&Move::new(square("e8"), square("g8"))));
+        assert!(moves.contains(&Move::new(square("e8"), square("c8"))));
+    }
+
+    #[test]
+    fn blocked_castling_is_not_generated() {
+        let board = Board::from_fen("r3k2r/8/8/8/8/8/8/R2BK2R w KQkq - 0 1").expect("valid FEN");
+        let moves = generate_legal_moves(&board);
+
+        assert!(moves.contains(&Move::new(square("e1"), square("g1"))));
+        assert!(!moves.contains(&Move::new(square("e1"), square("c1"))));
+    }
+
+    #[test]
+    fn castling_through_attacked_square_is_not_generated() {
+        let board = Board::from_fen("r3k2r/8/8/8/8/5r2/8/R3K2R w KQkq - 0 1").expect("valid FEN");
+        let moves = generate_legal_moves(&board);
+
+        assert!(is_square_attacked(&board, square("f1"), Color::Black));
+        assert!(!moves.contains(&Move::new(square("e1"), square("g1"))));
+    }
+
+    #[test]
+    fn castling_while_in_check_is_not_generated() {
+        let board = Board::from_fen("r3k2r/8/8/8/8/4r3/8/R3K2R w KQkq - 0 1").expect("valid FEN");
+        let moves = generate_legal_moves(&board);
+
+        assert!(!moves.contains(&Move::new(square("e1"), square("g1"))));
+        assert!(!moves.contains(&Move::new(square("e1"), square("c1"))));
+    }
+
+    fn assert_promotions(moves: &[Move], from: Square, to: Square) {
+        for promotion in PROMOTION_PIECES {
+            assert!(moves.contains(&Move::promotion(from, to, promotion)));
+        }
     }
 }
