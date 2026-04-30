@@ -69,9 +69,19 @@ impl Move {
 impl fmt::Display for Move {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.promotion {
-            Some(kind) => write!(f, "{}{}{:?}", self.from, self.to, kind),
+            Some(kind) => write!(f, "{}{}{}", self.from, self.to, promotion_char(kind)),
             None => write!(f, "{}{}", self.from, self.to),
         }
+    }
+}
+
+fn promotion_char(kind: PieceKind) -> char {
+    match kind {
+        PieceKind::Queen => 'q',
+        PieceKind::Rook => 'r',
+        PieceKind::Bishop => 'b',
+        PieceKind::Knight => 'n',
+        PieceKind::Pawn | PieceKind::King => '?',
     }
 }
 
