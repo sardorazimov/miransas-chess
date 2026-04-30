@@ -1,0 +1,7 @@
+[package]
+name = "miransas-chess"
+version = "0.1.0"
+authors = ["Sardor Azimov"]
+edition = "2024"
+
+[dependencies]
