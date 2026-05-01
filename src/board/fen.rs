@@ -52,6 +52,8 @@ pub fn parse_fen(fen: &str) -> Result<Board, FenError> {
         return Err(FenError::InvalidFullmoveNumber);
     }
 
+    board.zobrist_key = crate::search::zobrist().hash_board(&board);
+
     Ok(board)
 }
 

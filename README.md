@@ -1,50 +1,118 @@
-# ♟️ MIRANSAS-CHESS
+# miransas-chess
 
-A modern chess engine written in **Rust**, focused on clean architecture, performance, and long-term extensibility.
-
-> Built as part of the Miransas ecosystem — minimal, powerful, and developer-friendly.
+A UCI chess engine written in Rust. Focused on correctness, clean architecture, and performance built in measured layers.
 
 ---
 
-## 🚧 Status
+## Features
 
-🚀 Early development (work in progress)
-
-Current focus:
-- Board representation
-- FEN parsing
-- Move generation (in progress)
-- Perft validation
-
----
-
-## 🧠 Philosophy
-
-This project follows a simple rule:
-
-> **Correctness first → Performance later**
-
-Instead of premature optimization, the engine is being built in layers:
-1. Fully correct move generation
-2. Reliable search
-3. Incremental optimizations
-4. Advanced features (NNUE, tuning, etc.)
+- **Board representation** — 64-square array with full FEN parsing (all six fields)
+- **Legal move generation** — pseudo-legal generation + legality filter; handles castling, en passant, and promotions
+- **Perft validation** — startpos depth 1–4 verified against known node counts
+- **Negamax search** — alpha-beta pruning, iterative deepening, aspiration windows
+- **Transposition table** — configurable size (MB), depth-preferred replacement
+- **Move ordering** — TT move, promotions, MVV-LVA captures, killer moves, history heuristic
+- **Quiescence search** — captures and promotions at leaf nodes
+- **Zobrist hashing** — incremental updates via `make_move`/`unmake_move` (no per-node board clone)
+- **Material evaluation** — piece values + piece-square tables
+- **UCI protocol** — `position`, `go depth`, `go movetime`, `bestmove`
+- **CLI interface** — demo, bench, perft, search commands with optional JSON output
 
 ---
 
-<!-- ## 🏗️ Project Structure
+## Build
 
-```text
+Requires Rust stable (2024 edition).
+
+```sh
+cargo build --release
+```
+
+---
+
+## Usage
+
+### UCI mode (for GUI / arena)
+
+```sh
+cargo run --release -- uci
+```
+
+### Demo (quick sanity check)
+
+```sh
+cargo run --release -- demo
+```
+
+### Perft
+
+```sh
+cargo run --release -- perft 4
+cargo run --release -- perft 4 --json
+```
+
+### Search
+
+```sh
+# Search startpos at depth 5
+cargo run --release -- search 5
+
+# Search a custom FEN
+cargo run --release -- search 5 "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1"
+
+# JSON output
+cargo run --release -- search 5 --json
+```
+
+### Bench
+
+```sh
+cargo run --release -- bench
+cargo run --release -- bench 4
+cargo run --release -- bench --json
+```
+
+---
+
+## Tests
+
+```sh
+cargo test --release
+```
+
+83 tests cover move generation, perft node counts, search correctness, TT behavior, UCI parsing, Zobrist hashing, and make/unmake reversibility across 5 standard positions (including Kiwipete).
+
+---
+
+## Project structure
+
+```
 src/
- ├── board/        # Core board representation (pieces, squares, FEN)
- ├── movegen/      # Move generation (pseudo-legal → legal)
- ├── search/       # Search algorithms (negamax, alpha-beta)
- ├── evaluation/   # Position evaluation (planned)
- ├── nnue/         # Neural evaluation (future)
- ├── engine/       # Engine orchestration
- └── main.rs       # Entry point -->
+├── board/        board representation, FEN parsing, make/unmake
+├── movegen/      move generation, perft
+├── search/       negamax, transposition table, Zobrist hashing
+├── evaluation/   material + piece-square evaluation
+├── bench/        benchmark runner
+├── uci/          UCI protocol loop and command parser
+└── main.rs       CLI entry point
+```
 
+---
 
- 🔥 Author
-Built by Sardor Azimov
-Part of the Miransas ecosystem
+## Roadmap
+
+See [CHANGELOG.md](CHANGELOG.md) for completed work.
+
+Planned improvements (FAZ 1 → FAZ 5):
+- Bitboard representation (attack lookups, magic numbers)
+- Null-move pruning, late-move reductions
+- Static exchange evaluation
+- Syzygy tablebase support
+- NNUE evaluation
+- 3-fold repetition and 50-move rule
+
+---
+
+## Author
+
+Sardor Azimov — part of the Miransas project.

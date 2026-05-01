@@ -1,18 +1,78 @@
 use crate::{
-    board::{Board, PieceKind},
+    board::{Board, Color, PieceKind, Undo},
     evaluation::evaluate,
     movegen::{Move, generate_legal_moves, is_in_check},
-    search::{
-        tt::{Bound, TTEntry, TranspositionTable},
-        zobrist::Zobrist,
-    },
+    search::tt::{Bound, TTEntry, TranspositionTable},
 };
 
 const CHECKMATE_SCORE: i32 = 100_000;
+const ASPIRATION_WINDOW: i32 = 50;
+const NEG_INF: i32 = i32::MIN + 1;
+const POS_INF: i32 = i32::MAX;
+const MAX_DEPTH: usize = 64;
+
+pub struct KillerMoves {
+    moves: [[Option<Move>; 2]; MAX_DEPTH],
+}
+
+impl KillerMoves {
+    pub const fn new() -> Self {
+        Self {
+            moves: [[None; 2]; MAX_DEPTH],
+        }
+    }
+
+    fn store(&mut self, ply: usize, mv: Move) {
+        if ply >= MAX_DEPTH || self.moves[ply][0] == Some(mv) {
+            return;
+        }
+
+        self.moves[ply][1] = self.moves[ply][0];
+        self.moves[ply][0] = Some(mv);
+    }
+
+    fn is_killer(&self, ply: usize, mv: Move) -> bool {
+        ply < MAX_DEPTH && self.moves[ply].contains(&Some(mv))
+    }
+}
+
+impl Default for KillerMoves {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+pub struct HistoryHeuristic {
+    table: [[[i32; 64]; 64]; 2],
+}
+
+impl HistoryHeuristic {
+    pub const fn new() -> Self {
+        Self {
+            table: [[[0; 64]; 64]; 2],
+        }
+    }
+
+    fn add(&mut self, color: Color, mv: Move, depth: u32) {
+        let bonus = (depth * depth) as i32;
+        self.table[color_index(color)][mv.from.index()][mv.to.index()] += bonus;
+    }
+
+    fn score(&self, color: Color, mv: Move) -> i32 {
+        self.table[color_index(color)][mv.from.index()][mv.to.index()]
+    }
+}
+
+impl Default for HistoryHeuristic {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 struct SearchContext<'a> {
-    zobrist: &'a Zobrist,
     tt: &'a mut TranspositionTable,
+    killer_moves: KillerMoves,
+    history: HistoryHeuristic,
     tt_hits: u64,
 }
 
@@ -39,16 +99,24 @@ pub fn search_best_move(board: &Board, depth: u32) -> SearchResult {
 }
 
 pub fn search_best_move_with_tt(board: &Board, depth: u32, tt_size_mb: usize) -> SearchResult {
+    let mut board = board.clone();
     let mut nodes = 0;
-    let zobrist = Zobrist::new();
     let mut tt = TranspositionTable::new(tt_size_mb);
     tt.clear();
     let mut context = SearchContext {
-        zobrist: &zobrist,
         tt: &mut tt,
+        killer_moves: KillerMoves::new(),
+        history: HistoryHeuristic::new(),
         tt_hits: 0,
     };
-    let result = search_root(board, depth, &mut nodes, &mut context);
+    let result = search_root(
+        &mut board,
+        depth,
+        NEG_INF,
+        POS_INF,
+        &mut nodes,
+        &mut context,
+    );
 
     SearchResult {
         best_move: result.best_move,
@@ -59,29 +127,41 @@ pub fn search_best_move_with_tt(board: &Board, depth: u32, tt_size_mb: usize) ->
 }
 
 pub fn search_iterative(board: &Board, max_depth: u32, tt_size_mb: usize) -> IterativeSearchResult {
-    let zobrist = Zobrist::new();
+    let mut board = board.clone();
     let mut tt = TranspositionTable::new(tt_size_mb);
     tt.clear();
     let mut context = SearchContext {
-        zobrist: &zobrist,
         tt: &mut tt,
+        killer_moves: KillerMoves::new(),
+        history: HistoryHeuristic::new(),
         tt_hits: 0,
     };
     let mut nodes = 0;
     let mut latest = SearchResult {
         best_move: None,
-        score: terminal_score(board, 0),
+        score: terminal_score(&board, 0),
         nodes: 0,
         tt_hits: 0,
     };
     let mut reached_depth = 0;
+    let mut previous_score: i32 = 0;
 
     for depth in 1..=max_depth {
-        latest = search_root(board, depth, &mut nodes, &mut context);
+        let alpha = previous_score.saturating_sub(ASPIRATION_WINDOW);
+        let beta = previous_score.saturating_add(ASPIRATION_WINDOW);
+        latest = search_root(&mut board, depth, alpha, beta, &mut nodes, &mut context);
+
+        if latest.score <= alpha {
+            latest = search_root(&mut board, depth, NEG_INF, beta, &mut nodes, &mut context);
+        } else if latest.score >= beta {
+            latest = search_root(&mut board, depth, alpha, POS_INF, &mut nodes, &mut context);
+        }
+
+        previous_score = latest.score;
         reached_depth = depth;
     }
 
-    let principal_variation = extract_pv(board, context.zobrist, context.tt, reached_depth);
+    let principal_variation = extract_pv(&board, context.tt, reached_depth);
 
     IterativeSearchResult {
         best_move: latest.best_move,
@@ -101,14 +181,16 @@ pub fn format_pv(pv: &[Move]) -> String {
 }
 
 fn search_root(
-    board: &Board,
+    board: &mut Board,
     depth: u32,
+    mut alpha: i32,
+    beta: i32,
     nodes: &mut u64,
     context: &mut SearchContext<'_>,
 ) -> SearchResult {
-    let key = context.zobrist.hash_board(board);
+    let key = board.zobrist_key;
     let tt_best_move = context.tt.get(key).and_then(|entry| entry.best_move);
-    let moves = ordered_legal_moves(board, tt_best_move);
+    let moves = ordered_legal_moves(board, tt_best_move, context, 0);
 
     if moves.is_empty() {
         return SearchResult {
@@ -121,19 +203,19 @@ fn search_root(
 
     let mut best_move = None;
     let mut best_score = i32::MIN;
-    let mut alpha = i32::MIN + 1;
-    let beta = i32::MAX;
+    let original_alpha = alpha;
 
     for mv in moves {
-        let next_board = board.make_move_unchecked(mv);
+        let undo: Undo = board.make_move(mv);
         let score = -negamax_alpha_beta(
-            &next_board,
+            board,
             depth.saturating_sub(1),
             -beta,
             -alpha,
             nodes,
             context,
         );
+        board.unmake_move(&undo);
 
         if best_move.is_none() || score > best_score {
             best_move = Some(mv);
@@ -146,7 +228,7 @@ fn search_root(
         key,
         depth,
         score: best_score,
-        bound: Bound::Exact,
+        bound: root_bound(best_score, original_alpha, beta),
         best_move,
     });
 
@@ -158,23 +240,35 @@ fn search_root(
     }
 }
 
-fn ordered_legal_moves(board: &Board, tt_best_move: Option<Move>) -> Vec<Move> {
+fn root_bound(score: i32, alpha: i32, beta: i32) -> Bound {
+    if score <= alpha {
+        Bound::Upper
+    } else if score >= beta {
+        Bound::Lower
+    } else {
+        Bound::Exact
+    }
+}
+
+fn ordered_legal_moves(
+    board: &Board,
+    tt_best_move: Option<Move>,
+    context: &SearchContext<'_>,
+    ply: usize,
+) -> Vec<Move> {
     let mut moves = generate_legal_moves(board);
-    moves.sort_by_key(|&mv| std::cmp::Reverse(move_order_score(board, mv, tt_best_move)));
+    moves.sort_by_key(|&mv| {
+        std::cmp::Reverse(move_order_score(board, mv, tt_best_move, context, ply))
+    });
     moves
 }
 
-fn extract_pv(
-    board: &Board,
-    zobrist: &Zobrist,
-    tt: &TranspositionTable,
-    max_depth: u32,
-) -> Vec<Move> {
+fn extract_pv(board: &Board, tt: &TranspositionTable, max_depth: u32) -> Vec<Move> {
     let mut pv = Vec::new();
     let mut current = board.clone();
 
     for _ in 0..max_depth {
-        let key = zobrist.hash_board(&current);
+        let key = current.zobrist_key;
         let Some(best_move) = tt.get(key).and_then(|entry| entry.best_move) else {
             break;
         };
@@ -184,40 +278,41 @@ fn extract_pv(
         }
 
         pv.push(best_move);
-        current = current.make_move_unchecked(best_move);
+        current.make_move(best_move);
     }
 
     pv
 }
 
-fn move_order_score(board: &Board, mv: Move, tt_best_move: Option<Move>) -> i32 {
-    let tt_bonus = if Some(mv) == tt_best_move {
-        1_000_000
-    } else {
-        0
-    };
-    tt_bonus + score_move(board, mv)
-}
-
-fn score_move(board: &Board, mv: Move) -> i32 {
-    let mut score = promotion_score(mv);
-
-    if let Some(victim) = captured_piece_kind(board, &mv)
-        && let Some(attacker) = board.piece_at(mv.from)
-    {
-        score += piece_value(victim) * 10 - piece_value(attacker.kind);
+fn move_order_score(
+    board: &Board,
+    mv: Move,
+    tt_best_move: Option<Move>,
+    context: &SearchContext<'_>,
+    ply: usize,
+) -> i32 {
+    if Some(mv) == tt_best_move {
+        return 10_000_000;
     }
 
-    let next_board = board.make_move_unchecked(mv);
-    if is_in_check(&next_board, board.side_to_move.opposite()) {
-        score += 100;
+    let promotion = promotion_score(mv);
+    if promotion > 0 {
+        return 9_000_000 + promotion;
     }
 
-    score
+    if let Some(capture_score) = capture_score(board, mv) {
+        return 8_000_000 + capture_score;
+    }
+
+    if context.killer_moves.is_killer(ply, mv) {
+        return 7_000_000;
+    }
+
+    context.history.score(board.side_to_move, mv)
 }
 
 fn negamax_alpha_beta(
-    board: &Board,
+    board: &mut Board,
     depth: u32,
     alpha: i32,
     beta: i32,
@@ -228,7 +323,7 @@ fn negamax_alpha_beta(
 }
 
 fn negamax_alpha_beta_with_ply(
-    board: &Board,
+    board: &mut Board,
     depth: u32,
     mut alpha: i32,
     mut beta: i32,
@@ -242,7 +337,7 @@ fn negamax_alpha_beta_with_ply(
         return quiescence(board, alpha, beta, nodes);
     }
 
-    let key = context.zobrist.hash_board(board);
+    let key = board.zobrist_key;
     let original_alpha = alpha;
     let tt_best_move = if let Some(entry) = context.tt.get(key) {
         if entry.depth >= depth {
@@ -261,7 +356,7 @@ fn negamax_alpha_beta_with_ply(
         None
     };
 
-    let moves = ordered_legal_moves(board, tt_best_move);
+    let moves = ordered_legal_moves(board, tt_best_move, context, ply as usize);
     if moves.is_empty() {
         return terminal_score(board, ply);
     }
@@ -269,16 +364,11 @@ fn negamax_alpha_beta_with_ply(
     let mut best_move = None;
     let mut best_score = i32::MIN;
     for mv in moves {
-        let next_board = board.make_move_unchecked(mv);
-        let score = -negamax_alpha_beta_with_ply(
-            &next_board,
-            depth - 1,
-            -beta,
-            -alpha,
-            nodes,
-            context,
-            ply + 1,
-        );
+        let undo = board.make_move(mv);
+        let score =
+            -negamax_alpha_beta_with_ply(board, depth - 1, -beta, -alpha, nodes, context, ply + 1);
+        board.unmake_move(&undo);
+
         if score > best_score {
             best_score = score;
             best_move = Some(mv);
@@ -286,6 +376,10 @@ fn negamax_alpha_beta_with_ply(
         alpha = alpha.max(score);
 
         if alpha >= beta {
+            if is_quiet(board, &mv) {
+                context.killer_moves.store(ply as usize, mv);
+                context.history.add(board.side_to_move, mv, depth);
+            }
             break;
         }
     }
@@ -309,7 +403,7 @@ fn negamax_alpha_beta_with_ply(
     best_score
 }
 
-fn quiescence(board: &Board, mut alpha: i32, beta: i32, nodes: &mut u64) -> i32 {
+fn quiescence(board: &mut Board, mut alpha: i32, beta: i32, nodes: &mut u64) -> i32 {
     *nodes += 1;
 
     let stand_pat = evaluate(board);
@@ -321,13 +415,15 @@ fn quiescence(board: &Board, mut alpha: i32, beta: i32, nodes: &mut u64) -> i32 
         alpha = stand_pat;
     }
 
-    let noisy_moves = ordered_legal_moves(board, None)
+    let noisy_moves: Vec<_> = generate_legal_moves(board)
         .into_iter()
-        .filter(|mv| is_capture(board, mv) || mv.promotion.is_some());
+        .filter(|mv| is_capture(board, mv) || mv.promotion.is_some())
+        .collect();
 
     for mv in noisy_moves {
-        let next_board = board.make_move_unchecked(mv);
-        let score = -quiescence(&next_board, -beta, -alpha, nodes);
+        let undo = board.make_move(mv);
+        let score = -quiescence(board, -beta, -alpha, nodes);
+        board.unmake_move(&undo);
 
         if score >= beta {
             return beta;
@@ -361,6 +457,17 @@ fn is_capture(board: &Board, mv: &Move) -> bool {
     captured_piece_kind(board, mv).is_some()
 }
 
+fn is_quiet(board: &Board, mv: &Move) -> bool {
+    !is_capture(board, mv) && mv.promotion.is_none()
+}
+
+fn capture_score(board: &Board, mv: Move) -> Option<i32> {
+    let victim = captured_piece_kind(board, &mv)?;
+    let attacker = board.piece_at(mv.from)?;
+
+    Some(piece_value(victim) * 10 - piece_value(attacker.kind))
+}
+
 fn captured_piece_kind(board: &Board, mv: &Move) -> Option<PieceKind> {
     if let Some(piece) = board.piece_at(mv.to) {
         return Some(piece.kind);
@@ -375,6 +482,13 @@ fn captured_piece_kind(board: &Board, mv: &Move) -> Option<PieceKind> {
     }
 
     None
+}
+
+fn color_index(color: Color) -> usize {
+    match color {
+        Color::White => 0,
+        Color::Black => 1,
+    }
 }
 
 fn piece_value(kind: PieceKind) -> i32 {
@@ -404,7 +518,9 @@ mod tests {
     #[test]
     fn capture_move_is_ordered_before_quiet_move() {
         let board = Board::from_fen("4k3/8/8/3q4/8/2N5/8/4K3 w - - 0 1").expect("valid FEN");
-        let moves = ordered_legal_moves(&board, None);
+        let mut tt = TranspositionTable::new(0);
+        let context = test_context(&mut tt);
+        let moves = ordered_legal_moves(&board, None, &context, 0);
 
         assert_eq!(moves.first(), Some(&Move::new(square("c3"), square("d5"))));
     }
@@ -412,7 +528,9 @@ mod tests {
     #[test]
     fn promotion_move_is_ordered_before_quiet_move() {
         let board = Board::from_fen("4k3/P7/8/8/8/8/8/4K3 w - - 0 1").expect("valid FEN");
-        let moves = ordered_legal_moves(&board, None);
+        let mut tt = TranspositionTable::new(0);
+        let context = test_context(&mut tt);
+        let moves = ordered_legal_moves(&board, None, &context, 0);
 
         assert_eq!(
             moves.first(),
@@ -422,6 +540,29 @@ mod tests {
                 PieceKind::Queen
             ))
         );
+    }
+
+    #[test]
+    fn killer_move_is_prioritized() {
+        let board = Board::startpos();
+        let mut tt = TranspositionTable::new(0);
+        let mut context = test_context(&mut tt);
+        let killer = Move::new(square("g1"), square("f3"));
+
+        context.killer_moves.store(0, killer);
+        let moves = ordered_legal_moves(&board, None, &context, 0);
+
+        assert_eq!(moves.first(), Some(&killer));
+    }
+
+    #[test]
+    fn history_increases_for_good_moves() {
+        let mut history = HistoryHeuristic::new();
+        let mv = Move::new(square("b1"), square("c3"));
+
+        history.add(Color::White, mv, 3);
+
+        assert_eq!(history.score(Color::White, mv), 9);
     }
 
     #[test]
@@ -446,7 +587,7 @@ mod tests {
     fn quiescence_does_not_panic() {
         let board = Board::from_fen("4k3/8/8/3q4/8/2N5/8/4K3 w - - 0 1").expect("valid FEN");
         let mut nodes = 0;
-        let score = quiescence(&board, i32::MIN + 1, i32::MAX, &mut nodes);
+        let score = quiescence(&mut board.clone(), i32::MIN + 1, i32::MAX, &mut nodes);
 
         assert!(nodes > 0);
         assert!(score > i32::MIN);
@@ -457,23 +598,30 @@ mod tests {
         let board = Board::from_fen("4k3/8/8/3q4/8/2N5/8/4K3 w - - 0 1").expect("valid FEN");
         let mut quiescence_nodes = 0;
         let mut static_nodes = 0;
-        let zobrist = Zobrist::new();
         let mut tt = TranspositionTable::new(0);
         let mut context = SearchContext {
-            zobrist: &zobrist,
             tt: &mut tt,
+            killer_moves: KillerMoves::new(),
+            history: HistoryHeuristic::new(),
             tt_hits: 0,
         };
 
         let _ = negamax_alpha_beta(
-            &board,
+            &mut board.clone(),
             0,
             i32::MIN + 1,
             i32::MAX,
             &mut quiescence_nodes,
             &mut context,
         );
-        let _ = static_leaf_alpha_beta(&board, 0, i32::MIN + 1, i32::MAX, &mut static_nodes, 1);
+        let _ = static_leaf_alpha_beta(
+            &mut board.clone(),
+            0,
+            i32::MIN + 1,
+            i32::MAX,
+            &mut static_nodes,
+            1,
+        );
 
         assert!(quiescence_nodes > static_nodes);
     }
@@ -505,6 +653,15 @@ mod tests {
     }
 
     #[test]
+    fn iterative_search_score_matches_full_window_search() {
+        let board = Board::startpos();
+        let iterative = search_iterative(&board, 3, 4);
+        let full_window = search_best_move_with_tt(&board, 3, 4);
+
+        assert_eq!(iterative.score, full_window.score);
+    }
+
+    #[test]
     fn iterative_search_final_depth_equals_requested_depth() {
         let board = Board::startpos();
         let result = search_iterative(&board, 3, 4);
@@ -528,7 +685,7 @@ mod tests {
 
         for mv in result.principal_variation {
             assert!(generate_legal_moves(&current).contains(&mv));
-            current = current.make_move_unchecked(mv);
+            current.make_move(mv);
         }
     }
 
@@ -553,7 +710,7 @@ mod tests {
     }
 
     fn static_leaf_alpha_beta(
-        board: &Board,
+        board: &mut Board,
         depth: u32,
         mut alpha: i32,
         beta: i32,
@@ -572,9 +729,9 @@ mod tests {
         }
 
         for mv in moves {
-            let next_board = board.make_move_unchecked(mv);
-            let score =
-                -static_leaf_alpha_beta(&next_board, depth - 1, -beta, -alpha, nodes, ply + 1);
+            let undo = board.make_move(mv);
+            let score = -static_leaf_alpha_beta(board, depth - 1, -beta, -alpha, nodes, ply + 1);
+            board.unmake_move(&undo);
             alpha = alpha.max(score);
 
             if alpha >= beta {
@@ -587,5 +744,14 @@ mod tests {
 
     fn square(algebraic: &str) -> crate::board::Square {
         crate::board::Square::from_algebraic(algebraic).expect("test square is valid")
+    }
+
+    fn test_context(tt: &mut TranspositionTable) -> SearchContext<'_> {
+        SearchContext {
+            tt,
+            killer_moves: KillerMoves::new(),
+            history: HistoryHeuristic::new(),
+            tt_hits: 0,
+        }
     }
 }

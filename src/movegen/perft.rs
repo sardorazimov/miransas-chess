@@ -2,7 +2,7 @@ use crate::board::Board;
 
 use super::{generate_legal_moves, generate_pseudo_legal_moves};
 
-pub fn perft(board: &Board, depth: u32) -> u64 {
+pub fn perft(board: &mut Board, depth: u32) -> u64 {
     if depth == 0 {
         return 1;
     }
@@ -12,13 +12,16 @@ pub fn perft(board: &Board, depth: u32) -> u64 {
         return moves.len() as u64;
     }
 
-    moves
-        .into_iter()
-        .map(|mv| perft(&board.make_move_unchecked(mv), depth - 1))
-        .sum()
+    let mut total = 0;
+    for mv in moves {
+        let undo = board.make_move(mv);
+        total += perft(board, depth - 1);
+        board.unmake_move(&undo);
+    }
+    total
 }
 
-pub fn perft_legal(board: &Board, depth: u32) -> u64 {
+pub fn perft_legal(board: &mut Board, depth: u32) -> u64 {
     if depth == 0 {
         return 1;
     }
@@ -28,10 +31,13 @@ pub fn perft_legal(board: &Board, depth: u32) -> u64 {
         return moves.len() as u64;
     }
 
-    moves
-        .into_iter()
-        .map(|mv| perft_legal(&board.make_move_unchecked(mv), depth - 1))
-        .sum()
+    let mut total = 0;
+    for mv in moves {
+        let undo = board.make_move(mv);
+        total += perft_legal(board, depth - 1);
+        board.unmake_move(&undo);
+    }
+    total
 }
 
 #[cfg(test)]
@@ -40,18 +46,18 @@ mod tests {
 
     #[test]
     fn perft_depth_one_matches_pseudo_move_count() {
-        let board = Board::startpos();
+        let mut board = Board::startpos();
 
-        assert_eq!(perft(&board, 1), 20);
+        assert_eq!(perft(&mut board, 1), 20);
     }
 
     #[test]
     fn legal_perft_startpos_matches_known_counts() {
-        let board = Board::startpos();
+        let mut board = Board::startpos();
 
-        assert_eq!(perft_legal(&board, 1), 20);
-        assert_eq!(perft_legal(&board, 2), 400);
-        assert_eq!(perft_legal(&board, 3), 8902);
-        assert_eq!(perft_legal(&board, 4), 197281);
+        assert_eq!(perft_legal(&mut board, 1), 20);
+        assert_eq!(perft_legal(&mut board, 2), 400);
+        assert_eq!(perft_legal(&mut board, 3), 8902);
+        assert_eq!(perft_legal(&mut board, 4), 197281);
     }
 }

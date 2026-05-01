@@ -126,7 +126,7 @@ fn parse_go(tokens: &[&str]) -> Option<GoCommand> {
 fn apply_moves(mut board: Board, moves: &[String]) -> Option<Board> {
     for text in moves {
         let mv = parse_uci_move(&board, text)?;
-        board = board.make_move_unchecked(mv);
+        board.make_move(mv);
     }
 
     Some(board)

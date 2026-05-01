@@ -1,6 +1,14 @@
-use crate::board::{Board, Color, PieceKind};
+use std::sync::OnceLock;
+
+use crate::board::{Board, CastlingRights, Color, PieceKind, Square};
 
 const ZOBRIST_SEED: u64 = 0x9e37_79b9_7f4a_7c15;
+
+static ZOBRIST: OnceLock<Zobrist> = OnceLock::new();
+
+pub fn zobrist() -> &'static Zobrist {
+    ZOBRIST.get_or_init(Zobrist::new)
+}
 
 pub struct Zobrist {
     piece_square: [[[u64; 64]; 6]; 2],
@@ -56,13 +64,29 @@ impl Zobrist {
             hash ^= self.side_to_move;
         }
 
-        hash ^= self.castling[castling_index(board)];
+        hash ^= self.castling[castling_index_from_rights(&board.castling_rights)];
 
         if let Some(en_passant) = board.en_passant {
             hash ^= self.en_passant_file[en_passant.file() as usize];
         }
 
         hash
+    }
+
+    pub fn toggle_piece(&self, hash: u64, color: Color, kind: PieceKind, square: Square) -> u64 {
+        hash ^ self.piece_square[color_index(color)][piece_kind_index(kind)][square.index()]
+    }
+
+    pub fn toggle_side_to_move(&self, hash: u64) -> u64 {
+        hash ^ self.side_to_move
+    }
+
+    pub fn toggle_castling(&self, hash: u64, rights: &CastlingRights) -> u64 {
+        hash ^ self.castling[castling_index_from_rights(rights)]
+    }
+
+    pub fn toggle_en_passant(&self, hash: u64, square: Square) -> u64 {
+        hash ^ self.en_passant_file[square.file() as usize]
     }
 }
 
@@ -98,18 +122,18 @@ fn piece_kind_index(kind: PieceKind) -> usize {
     }
 }
 
-fn castling_index(board: &Board) -> usize {
+fn castling_index_from_rights(rights: &CastlingRights) -> usize {
     let mut index = 0;
-    if board.castling_rights.white_kingside {
+    if rights.white_kingside {
         index |= 1;
     }
-    if board.castling_rights.white_queenside {
+    if rights.white_queenside {
         index |= 2;
     }
-    if board.castling_rights.black_kingside {
+    if rights.black_kingside {
         index |= 4;
     }
-    if board.castling_rights.black_queenside {
+    if rights.black_queenside {
         index |= 8;
     }
     index
@@ -123,52 +147,53 @@ mod tests {
 
     #[test]
     fn same_board_hashes_the_same() {
-        let zobrist = Zobrist::new();
         let first = Board::startpos();
         let second = Board::startpos();
 
-        assert_eq!(zobrist.hash_board(&first), zobrist.hash_board(&second));
+        assert_eq!(first.zobrist_key, second.zobrist_key);
     }
 
     #[test]
     fn different_side_to_move_hashes_differently() {
-        let zobrist = Zobrist::new();
         let white = Board::from_fen("8/8/8/8/8/8/8/4K3 w - - 0 1").expect("valid FEN");
         let black = Board::from_fen("8/8/8/8/8/8/8/4K3 b - - 0 1").expect("valid FEN");
 
-        assert_ne!(zobrist.hash_board(&white), zobrist.hash_board(&black));
+        assert_ne!(white.zobrist_key, black.zobrist_key);
     }
 
     #[test]
     fn moving_piece_changes_hash() {
-        let zobrist = Zobrist::new();
         let board = Board::startpos();
-        let next = board.make_move_unchecked(Move::new(square("e2"), square("e4")));
+        let mut next = board.clone();
+        next.make_move(Move::new(square("e2"), square("e4")));
 
-        assert_ne!(zobrist.hash_board(&board), zobrist.hash_board(&next));
+        assert_ne!(board.zobrist_key, next.zobrist_key);
     }
 
     #[test]
     fn castling_rights_affect_hash() {
-        let zobrist = Zobrist::new();
         let with_rights =
             Board::from_fen("r3k2r/8/8/8/8/8/8/R3K2R w KQkq - 0 1").expect("valid FEN");
         let without_rights =
             Board::from_fen("r3k2r/8/8/8/8/8/8/R3K2R w - - 0 1").expect("valid FEN");
 
-        assert_ne!(
-            zobrist.hash_board(&with_rights),
-            zobrist.hash_board(&without_rights)
-        );
+        assert_ne!(with_rights.zobrist_key, without_rights.zobrist_key);
     }
 
     #[test]
     fn en_passant_file_affects_hash() {
-        let zobrist = Zobrist::new();
         let d_file = Board::from_fen("8/8/8/3pP3/8/8/8/4K3 w - d6 0 1").expect("valid FEN");
         let e_file = Board::from_fen("8/8/8/4pP2/8/8/8/4K3 w - e6 0 1").expect("valid FEN");
 
-        assert_ne!(zobrist.hash_board(&d_file), zobrist.hash_board(&e_file));
+        assert_ne!(d_file.zobrist_key, e_file.zobrist_key);
+    }
+
+    #[test]
+    fn hash_board_matches_zobrist_key_after_fen_parse() {
+        let z = zobrist();
+        let board = Board::startpos();
+
+        assert_eq!(z.hash_board(&board), board.zobrist_key);
     }
 
     fn square(algebraic: &str) -> Square {

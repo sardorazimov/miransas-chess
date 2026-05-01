@@ -16,6 +16,21 @@ pub struct Board {
     pub en_passant: Option<Square>,
     pub halfmove_clock: u32,
     pub fullmove_number: u32,
+    pub zobrist_key: u64,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct Undo {
+    pub mv: crate::movegen::Move,
+    pub captured: Option<Piece>,
+    pub captured_square: Square,
+    pub prev_castling_rights: CastlingRights,
+    pub prev_en_passant: Option<Square>,
+    pub prev_halfmove_clock: u32,
+    pub prev_zobrist_key: u64,
+    pub was_en_passant: bool,
+    pub was_castling: bool,
+    pub was_promotion: bool,
 }
 
 impl Board {
@@ -30,6 +45,7 @@ impl Board {
             en_passant: None,
             halfmove_clock: 0,
             fullmove_number: 1,
+            zobrist_key: 0,
         }
     }
 
@@ -85,65 +101,163 @@ impl Board {
         result
     }
 
-    pub fn make_move_unchecked(&self, mv: crate::movegen::Move) -> Self {
-        let mut next = self.clone();
-        let moving_piece = self.piece_at(mv.from);
-        let captured_piece = self.piece_at(mv.to);
+    pub fn make_move(&mut self, mv: crate::movegen::Move) -> Undo {
+        let z = crate::search::zobrist();
+        let mut hash = self.zobrist_key;
 
-        next.set_piece(mv.from, None);
-        if let Some(mut piece) = moving_piece {
-            let is_en_passant = piece.kind == PieceKind::Pawn
-                && Some(mv.to) == self.en_passant
-                && mv.from.file() != mv.to.file()
-                && captured_piece.is_none();
-            let captured_piece = if is_en_passant {
-                let captured_rank = match piece.color {
-                    Color::White => mv.to.rank() - 1,
-                    Color::Black => mv.to.rank() + 1,
-                };
-                let captured_square = Square::from_file_rank(mv.to.file(), captured_rank)
-                    .expect("en passant captured pawn square is on the board");
-                let captured_piece = self.piece_at(captured_square);
-                next.set_piece(captured_square, None);
-                captured_piece
-            } else {
-                captured_piece
+        let moving_piece = self
+            .piece_at(mv.from)
+            .expect("make_move called with no piece at mv.from");
+        let captured_at_to = self.piece_at(mv.to);
+
+        let prev_castling_rights = self.castling_rights;
+        let prev_en_passant = self.en_passant;
+        let prev_halfmove_clock = self.halfmove_clock;
+        let prev_zobrist_key = hash;
+
+        if let Some(ep) = prev_en_passant {
+            hash = z.toggle_en_passant(hash, ep);
+        }
+        hash = z.toggle_castling(hash, &prev_castling_rights);
+        hash = z.toggle_piece(hash, moving_piece.color, moving_piece.kind, mv.from);
+
+        let is_en_passant = moving_piece.kind == PieceKind::Pawn
+            && Some(mv.to) == self.en_passant
+            && mv.from.file() != mv.to.file()
+            && captured_at_to.is_none();
+
+        let is_castling =
+            moving_piece.kind == PieceKind::King && mv.from.file().abs_diff(mv.to.file()) == 2;
+
+        let is_promotion = mv.promotion.is_some();
+
+        let (captured, captured_square) = if is_en_passant {
+            let captured_rank = match moving_piece.color {
+                Color::White => mv.to.rank() - 1,
+                Color::Black => mv.to.rank() + 1,
             };
-
-            update_castling_rights_for_move(&mut next.castling_rights, piece, mv.from);
-            if let Some(captured_piece) = captured_piece {
-                update_castling_rights_for_capture(
-                    &mut next.castling_rights,
-                    captured_piece,
-                    mv.to,
-                );
+            let csq = Square::from_file_rank(mv.to.file(), captured_rank)
+                .expect("en passant captured pawn square is valid");
+            let cap = self.piece_at(csq);
+            if let Some(cp) = cap {
+                hash = z.toggle_piece(hash, cp.color, cp.kind, csq);
             }
-
-            if piece.kind == PieceKind::King && mv.from.file().abs_diff(mv.to.file()) == 2 {
-                move_castling_rook(&mut next, piece.color, mv.to);
+            self.set_piece(csq, None);
+            (cap, csq)
+        } else {
+            if let Some(cp) = captured_at_to {
+                hash = z.toggle_piece(hash, cp.color, cp.kind, mv.to);
             }
+            (captured_at_to, mv.to)
+        };
 
-            let was_pawn = piece.kind == PieceKind::Pawn;
-            if let Some(promotion) = mv.promotion {
-                piece.kind = promotion;
+        if is_castling
+            && let Some((rook_from, rook_to)) = castling_rook_squares(moving_piece.color, mv.to)
+        {
+            let rook = self.piece_at(rook_from);
+            if let Some(r) = rook {
+                hash = z.toggle_piece(hash, r.color, r.kind, rook_from);
+                hash = z.toggle_piece(hash, r.color, r.kind, rook_to);
             }
-            next.set_piece(mv.to, Some(piece));
-
-            if was_pawn || captured_piece.is_some() {
-                next.halfmove_clock = 0;
-            } else {
-                next.halfmove_clock += 1;
-            }
-
-            next.en_passant = double_pawn_push_en_passant_square(mv.from, mv.to, was_pawn);
+            self.set_piece(rook_from, None);
+            self.set_piece(rook_to, rook);
         }
 
-        next.side_to_move = self.side_to_move.opposite();
+        let was_pawn = moving_piece.kind == PieceKind::Pawn;
+        let mut landing_piece = moving_piece;
+        if let Some(promo_kind) = mv.promotion {
+            landing_piece.kind = promo_kind;
+        }
+        self.set_piece(mv.from, None);
+        self.set_piece(mv.to, Some(landing_piece));
+        hash = z.toggle_piece(hash, landing_piece.color, landing_piece.kind, mv.to);
+
+        if was_pawn || captured.is_some() {
+            self.halfmove_clock = 0;
+        } else {
+            self.halfmove_clock += 1;
+        }
+
+        update_castling_rights_for_move(&mut self.castling_rights, moving_piece, mv.from);
+        if let Some(cap) = captured {
+            update_castling_rights_for_capture(&mut self.castling_rights, cap, captured_square);
+        }
+
+        self.en_passant = double_pawn_push_en_passant_square(mv.from, mv.to, was_pawn);
+        if let Some(ep) = self.en_passant {
+            hash = z.toggle_en_passant(hash, ep);
+        }
+        hash = z.toggle_castling(hash, &self.castling_rights);
+
         if self.side_to_move == Color::Black {
-            next.fullmove_number += 1;
+            self.fullmove_number += 1;
+        }
+        self.side_to_move = self.side_to_move.opposite();
+        hash = z.toggle_side_to_move(hash);
+
+        self.zobrist_key = hash;
+
+        Undo {
+            mv,
+            captured,
+            captured_square,
+            prev_castling_rights,
+            prev_en_passant,
+            prev_halfmove_clock,
+            prev_zobrist_key,
+            was_en_passant: is_en_passant,
+            was_castling: is_castling,
+            was_promotion: is_promotion,
+        }
+    }
+
+    pub fn unmake_move(&mut self, undo: &Undo) {
+        let mv = undo.mv;
+
+        self.side_to_move = self.side_to_move.opposite();
+        if self.side_to_move == Color::Black {
+            self.fullmove_number -= 1;
         }
 
-        next
+        self.castling_rights = undo.prev_castling_rights;
+        self.en_passant = undo.prev_en_passant;
+        self.halfmove_clock = undo.prev_halfmove_clock;
+        self.zobrist_key = undo.prev_zobrist_key;
+
+        let color = self.side_to_move;
+
+        if undo.was_castling
+            && let Some((rook_from, rook_to)) = castling_rook_squares(color, mv.to)
+        {
+            let rook = self.piece_at(rook_to);
+            self.set_piece(rook_to, None);
+            self.set_piece(rook_from, rook);
+        }
+
+        let mut restore_piece = self
+            .piece_at(mv.to)
+            .expect("piece must be at mv.to during unmake");
+        if undo.was_promotion {
+            restore_piece.kind = PieceKind::Pawn;
+        }
+        self.set_piece(mv.from, Some(restore_piece));
+
+        if undo.was_en_passant {
+            self.set_piece(mv.to, None);
+            self.set_piece(undo.captured_square, undo.captured);
+        } else {
+            self.set_piece(mv.to, undo.captured);
+        }
+    }
+}
+
+fn castling_rook_squares(color: Color, king_to: Square) -> Option<(Square, Square)> {
+    match (color, king_to) {
+        (Color::White, sq) if sq == algebraic("g1") => Some((algebraic("h1"), algebraic("f1"))),
+        (Color::White, sq) if sq == algebraic("c1") => Some((algebraic("a1"), algebraic("d1"))),
+        (Color::Black, sq) if sq == algebraic("g8") => Some((algebraic("h8"), algebraic("f8"))),
+        (Color::Black, sq) if sq == algebraic("c8") => Some((algebraic("a8"), algebraic("d8"))),
+        _ => None,
     }
 }
 
@@ -200,20 +314,6 @@ fn update_castling_rights_for_capture(
     }
 }
 
-fn move_castling_rook(board: &mut Board, color: Color, king_to: Square) {
-    let (rook_from, rook_to) = match (color, king_to) {
-        (Color::White, square) if square == algebraic("g1") => (algebraic("h1"), algebraic("f1")),
-        (Color::White, square) if square == algebraic("c1") => (algebraic("a1"), algebraic("d1")),
-        (Color::Black, square) if square == algebraic("g8") => (algebraic("h8"), algebraic("f8")),
-        (Color::Black, square) if square == algebraic("c8") => (algebraic("a8"), algebraic("d8")),
-        _ => return,
-    };
-
-    let rook = board.piece_at(rook_from);
-    board.set_piece(rook_from, None);
-    board.set_piece(rook_to, rook);
-}
-
 fn algebraic(square: &str) -> Square {
     Square::from_algebraic(square).expect("hard-coded square is valid")
 }
@@ -221,6 +321,7 @@ fn algebraic(square: &str) -> Square {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::movegen::{Move, generate_legal_moves};
 
     #[test]
     fn start_position_fen_parses_correctly() {
@@ -244,8 +345,8 @@ mod tests {
     #[test]
     fn king_move_removes_both_castling_rights_for_that_color() {
         let board = Board::from_fen("r3k2r/8/8/8/8/8/8/R3K2R w KQkq - 0 1").expect("valid FEN");
-        let next =
-            board.make_move_unchecked(crate::movegen::Move::new(algebraic("e1"), algebraic("e2")));
+        let mut next = board.clone();
+        next.make_move(Move::new(algebraic("e1"), algebraic("e2")));
 
         assert!(!next.castling_rights.white_kingside);
         assert!(!next.castling_rights.white_queenside);
@@ -256,17 +357,46 @@ mod tests {
     #[test]
     fn rook_move_and_capture_remove_matching_castling_right() {
         let board = Board::from_fen("r3k2r/8/8/8/8/8/8/R3K2R w KQkq - 0 1").expect("valid FEN");
-        let rook_move =
-            board.make_move_unchecked(crate::movegen::Move::new(algebraic("h1"), algebraic("h2")));
+        let mut rook_move = board.clone();
+        rook_move.make_move(Move::new(algebraic("h1"), algebraic("h2")));
 
         assert!(!rook_move.castling_rights.white_kingside);
         assert!(rook_move.castling_rights.white_queenside);
 
-        let capture = Board::from_fen("r3k2r/8/8/8/8/8/6b1/R3K2R b KQkq - 0 1")
-            .expect("valid FEN")
-            .make_move_unchecked(crate::movegen::Move::new(algebraic("g2"), algebraic("h1")));
+        let mut capture =
+            Board::from_fen("r3k2r/8/8/8/8/8/6b1/R3K2R b KQkq - 0 1").expect("valid FEN");
+        capture.make_move(Move::new(algebraic("g2"), algebraic("h1")));
 
         assert!(!capture.castling_rights.white_kingside);
         assert!(capture.castling_rights.white_queenside);
+    }
+
+    #[test]
+    fn make_unmake_restores_board_exactly() {
+        let positions = [
+            "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+            "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1",
+            "8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 1",
+            "r3k2r/Pppp1ppp/1b3nbN/nP6/BBP1P3/q4N2/Pp1P2PP/R2Q1RK1 w kq - 0 1",
+            "rnbq1k1r/pp1Pbppp/2p5/8/2B5/8/PPP1NnPP/RNBQK2R w KQ - 1 8",
+        ];
+        for fen in positions {
+            let original = Board::from_fen(fen).expect("valid FEN");
+            let mut board = original.clone();
+            for mv in generate_legal_moves(&board) {
+                let snapshot = board.clone();
+                let undo = board.make_move(mv);
+                board.unmake_move(&undo);
+                assert_eq!(
+                    board, snapshot,
+                    "make/unmake mismatch on move {mv} in fen {fen}"
+                );
+                assert_eq!(
+                    board.zobrist_key, snapshot.zobrist_key,
+                    "zobrist_key drift on move {mv} in fen {fen}"
+                );
+            }
+            assert_eq!(board, original);
+        }
     }
 }

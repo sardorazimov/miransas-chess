@@ -98,12 +98,15 @@ pub fn generate_pseudo_legal_moves(board: &Board) -> Vec<Move> {
 
 pub fn generate_legal_moves(board: &Board) -> Vec<Move> {
     let us = board.side_to_move;
+    let mut board_copy = board.clone();
 
     generate_pseudo_legal_moves(board)
         .into_iter()
         .filter(|&mv| {
-            let next_board = board.make_move_unchecked(mv);
-            !is_in_check(&next_board, us)
+            let undo = board_copy.make_move(mv);
+            let legal = !is_in_check(&board_copy, us);
+            board_copy.unmake_move(&undo);
+            legal
         })
         .collect()
 }
@@ -536,11 +539,11 @@ mod tests {
         let moves = generate_legal_moves(&board);
 
         assert!(!moves.is_empty());
-        assert!(
-            moves
-                .into_iter()
-                .all(|mv| !is_in_check(&board.make_move_unchecked(mv), Color::White))
-        );
+        assert!(moves.into_iter().all(|mv| {
+            let mut b = board.clone();
+            b.make_move(mv);
+            !is_in_check(&b, Color::White)
+        }));
     }
 
     #[test]
@@ -558,11 +561,11 @@ mod tests {
                 .iter()
                 .all(|mv| mv.to.file() == rook_square.file())
         );
-        assert!(
-            legal_rook_moves
-                .into_iter()
-                .all(|mv| !is_in_check(&board.make_move_unchecked(mv), Color::White))
-        );
+        assert!(legal_rook_moves.into_iter().all(|mv| {
+            let mut b = board.clone();
+            b.make_move(mv);
+            !is_in_check(&b, Color::White)
+        }));
     }
 
     #[test]
@@ -595,7 +598,8 @@ mod tests {
     #[test]
     fn promotion_move_replaces_pawn_with_promoted_piece() {
         let board = Board::from_fen("8/P7/8/8/8/8/8/4K3 w - - 0 1").expect("valid FEN");
-        let next = board.make_move_unchecked(Move::promotion(
+        let mut next = board.clone();
+        next.make_move(Move::promotion(
             square("a7"),
             square("a8"),
             PieceKind::Knight,
@@ -615,7 +619,8 @@ mod tests {
 
         assert!(generate_pseudo_legal_moves(&board).contains(&mv));
 
-        let next = board.make_move_unchecked(mv);
+        let mut next = board.clone();
+        next.make_move(mv);
         assert_eq!(next.piece_at(square("e5")), None);
         assert_eq!(next.piece_at(square("d5")), None);
         assert_eq!(
