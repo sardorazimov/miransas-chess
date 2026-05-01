@@ -1,5 +1,7 @@
 # miransas-chess
-
+![Kittychess] <img src="https://github.com/sardorazimov/miransas-chess/blob/master/assets/logo.png" alt="Logo" width="200">
+![Miransas] <img src="https://github.com/sardorazimov/miransas-chess/blob/master/assets/miransas-logo.png" alt="Miransas" width="200"> 
+https://github.com/sardorazimov/miransas-chess/blob/master/assets/miransas-logo.png
 A UCI chess engine written in Rust. Focused on correctness, clean architecture, and performance built in measured layers.
 
 ---
