@@ -1,6 +1,9 @@
 # miransas-chess
-! <img src="https://github.com/sardorazimov/miransas-chess/blob/master/assets/logo.png" alt="Logo" width="400">
-! <img src="https://github.com/sardorazimov/miransas-chess/blob/master/assets/miransas-logo.png" alt="Miransas" width="200"> 
+<div aligin="center"> 
+ <img src="https://github.com/sardorazimov/miransas-chess/blob/master/assets/logo.png" alt="Logo" width="400">
+ <img src="https://github.com/sardorazimov/miransas-chess/blob/master/assets/miransas-logo.png" alt="Miransas" width="200"> 
+</div>
+
 
 A UCI chess engine written in Rust. Focused on correctness, clean architecture, and performance built in measured layers.
 
