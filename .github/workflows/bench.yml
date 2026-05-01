@@ -1,0 +1,72 @@
+name: Bench
+
+on:
+  pull_request:
+
+permissions:
+  pull-requests: write
+
+jobs:
+  bench-comparison:
+    name: bench-comparison
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo (PR)
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build bench (PR)
+        run: cargo build --release --bin bench
+
+      - name: Run bench (PR)
+        run: ./target/release/bench > pr.txt
+
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          path: main-checkout
+
+      - name: Build bench (main)
+        run: |
+          cd main-checkout
+          if cargo build --release --bin bench 2>/dev/null; then
+            echo "BENCH_BUILT=true" >> "$GITHUB_ENV"
+          else
+            echo "BENCH_BUILT=false" >> "$GITHUB_ENV"
+          fi
+
+      - name: Run bench (main)
+        run: |
+          if [ "$BENCH_BUILT" = "true" ] && [ -f main-checkout/target/release/bench ]; then
+            main-checkout/target/release/bench > main.txt
+          else
+            echo "MAIN HAS NO BENCH BINARY" > main.txt
+          fi
+
+      - name: Generate comparison report
+        run: |
+          echo "### 📊 Bench Comparison (main vs PR)" > report.md
+          echo "" >> report.md
+          bash scripts/compare_bench.sh main.txt pr.txt >> report.md
+          echo "" >> report.md
+          echo "<details><summary>Full PR bench output</summary>" >> report.md
+          echo "" >> report.md
+          echo '```' >> report.md
+          cat pr.txt >> report.md
+          echo '```' >> report.md
+          echo "" >> report.md
+          echo "</details>" >> report.md
+
+      - name: Post sticky comment
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: bench-comparison
+          path: report.md
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

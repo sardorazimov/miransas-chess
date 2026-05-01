@@ -4,4 +4,8 @@ version = "0.1.0"
 authors = ["Sardor Azimov"]
 edition = "2024"
 
+[[bin]]
+name = "bench"
+path = "src/bench/main.rs"
+
 [dependencies]
