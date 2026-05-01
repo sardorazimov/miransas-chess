@@ -22,7 +22,7 @@ A UCI chess engine written in Rust. Focused on correctness, clean architecture, 
 
 ## Build
 
-Requires Rust stable (2024 edition).
+Requires Rust stable (2026 edition).
 
 ```sh
 cargo build --release
