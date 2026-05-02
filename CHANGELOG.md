@@ -176,6 +176,51 @@ TOTAL nodes=12363429 us=1692748
 **Fix (CI):**
 - Refactored three division-by-zero guards to use `u128::checked_div` instead of manual `if x == 0` pattern. Clippy 1.95 introduced `manual_checked_ops` lint which flagged these. Behavior unchanged.
 
+#### BÖLÜM 2.4 — Aspiration Windows
+- Added Stockfish-style exponential aspiration windows in iterative deepening.
+- Active at depth >= 4. Initial half-window: 25 cp. Each fail doubles delta. Up to 4 retries before falling back to full window.
+- Fail-low widens alpha; fail-high widens beta. Within-window result terminates the retry loop immediately.
+- Depths 1–3 continue to use full window (`NEG_INF`, `POS_INF`) — no aspiration overhead at trivial depths.
+- Replaced `ASPIRATION_WINDOW` constant (fixed ±50, single retry) with `ASPIRATION_MIN_DEPTH`, `INITIAL_DELTA`, `MAX_RETRIES`.
+- Added tests: `aspiration_search_finds_legal_move_on_startpos`, `aspiration_search_still_finds_mate_in_one`, `aspiration_score_is_finite_on_quiet_startpos`.
+- Total tests: 96.
+
+**Before (BÖLÜM 2.3):**
+```
+PERFT startpos depth=5 nodes=4865609 us=417738 nps=11647513
+PERFT kiwipete depth=4 nodes=4085603 us=518483 nps=7879916
+PERFT pos3 depth=5 nodes=674624 us=85039 nps=7933113
+PERFT pos4 depth=4 nodes=422333 us=55174 nps=7654565
+PERFT pos5 depth=4 nodes=2103487 us=284538 nps=7392639
+SEARCH startpos depth=6 nodes=19794 us=23642 nps=837238
+SEARCH kiwipete depth=5 nodes=168992 us=289772 nps=583189
+SEARCH endgame depth=8 nodes=22987 us=18362 nps=1251878
+TOTAL nodes=12363429 us=1692748
+```
+
+**After (BÖLÜM 2.4):**
+```
+PERFT startpos depth=5 nodes=4865609 us=425025 nps=11447818
+PERFT kiwipete depth=4 nodes=4085603 us=545377 nps=7491337
+PERFT pos3 depth=5 nodes=674624 us=84439 nps=7989483
+PERFT pos4 depth=4 nodes=422333 us=56847 nps=7429292
+PERFT pos5 depth=4 nodes=2103487 us=286046 nps=7353666
+SEARCH startpos depth=6 nodes=14791 us=21318 nps=693826
+SEARCH kiwipete depth=5 nodes=169474 us=293073 nps=578265
+SEARCH endgame depth=8 nodes=22969 us=18664 nps=1230657
+TOTAL nodes=12358890 us=1730789
+```
+
+**Δ summary:**
+- startpos d6: 19,794 → 14,791 (−25.3%)
+- kiwipete d5: 168,992 → 169,474 (+0.3%; re-searches on fail-high/fail-low add nodes, net near-zero at this depth)
+- endgame d8: 22,987 → 22,969 (−0.1%)
+
+**Cumulative since BÖLÜM 1.2 baseline (search nodes total):**
+- 32,149,509 (1.2) → 207,234 (2.4) (−99.4%)
+
+**FAZ 2 complete.** Modern alpha-beta search now has: TT move ordering, MVV-LVA captures, killers, history heuristic, null move pruning, LMR, aspiration windows.
+
 ---
 
 #### Setup — CI + tooling

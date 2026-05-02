@@ -15,7 +15,9 @@ const LMR_MIN_DEPTH: u32 = 3;
 const LMR_MIN_MOVE_INDEX: usize = 4;
 
 const CHECKMATE_SCORE: i32 = 100_000;
-const ASPIRATION_WINDOW: i32 = 50;
+const ASPIRATION_MIN_DEPTH: u32 = 4;
+const INITIAL_DELTA: i32 = 25;
+const MAX_RETRIES: u32 = 4;
 const NEG_INF: i32 = i32::MIN + 1;
 const POS_INF: i32 = i32::MAX;
 
@@ -85,41 +87,61 @@ pub fn search_iterative(board: &Board, max_depth: u32, tt_size_mb: usize) -> Ite
     let mut previous_score: i32 = 0;
 
     for depth in 1..=max_depth {
-        let alpha = previous_score.saturating_sub(ASPIRATION_WINDOW);
-        let beta = previous_score.saturating_add(ASPIRATION_WINDOW);
-        latest = search_root(
-            &mut board,
-            depth,
-            alpha,
-            beta,
-            &mut nodes,
-            &mut tt_hits,
-            &mut ctx,
-            &mut tt,
-        );
-
-        if latest.score <= alpha {
+        if depth < ASPIRATION_MIN_DEPTH {
             latest = search_root(
                 &mut board,
                 depth,
                 NEG_INF,
-                beta,
-                &mut nodes,
-                &mut tt_hits,
-                &mut ctx,
-                &mut tt,
-            );
-        } else if latest.score >= beta {
-            latest = search_root(
-                &mut board,
-                depth,
-                alpha,
                 POS_INF,
                 &mut nodes,
                 &mut tt_hits,
                 &mut ctx,
                 &mut tt,
             );
+        } else {
+            let mut delta = INITIAL_DELTA;
+            let mut alpha = previous_score.saturating_sub(delta).max(NEG_INF);
+            let mut beta = previous_score.saturating_add(delta);
+            let mut retries = 0u32;
+
+            loop {
+                latest = search_root(
+                    &mut board,
+                    depth,
+                    alpha,
+                    beta,
+                    &mut nodes,
+                    &mut tt_hits,
+                    &mut ctx,
+                    &mut tt,
+                );
+
+                if latest.score <= alpha {
+                    delta *= 2;
+                    alpha = previous_score.saturating_sub(delta).max(NEG_INF);
+                    retries += 1;
+                } else if latest.score >= beta {
+                    delta *= 2;
+                    beta = previous_score.saturating_add(delta);
+                    retries += 1;
+                } else {
+                    break;
+                }
+
+                if retries >= MAX_RETRIES {
+                    latest = search_root(
+                        &mut board,
+                        depth,
+                        NEG_INF,
+                        POS_INF,
+                        &mut nodes,
+                        &mut tt_hits,
+                        &mut ctx,
+                        &mut tt,
+                    );
+                    break;
+                }
+            }
         }
 
         previous_score = latest.score;
@@ -749,5 +771,40 @@ mod tests {
 
     fn square(algebraic: &str) -> crate::board::Square {
         crate::board::Square::from_algebraic(algebraic).expect("test square is valid")
+    }
+
+    #[test]
+    fn aspiration_search_finds_legal_move_on_startpos() {
+        let board = Board::startpos();
+        let result = search_iterative(&board, 6, 16);
+        assert!(result.best_move.is_some());
+        let mv = result.best_move.unwrap();
+        let legal = generate_legal_moves(&board);
+        assert!(legal.contains(&mv));
+    }
+
+    #[test]
+    fn aspiration_search_still_finds_mate_in_one() {
+        let board = Board::from_fen("6k1/5ppp/8/8/8/8/5PPP/4R1K1 w - - 0 1").expect("valid FEN");
+        let result = search_iterative(&board, 6, 4);
+        assert!(result.best_move.is_some());
+        assert!(
+            result.score > 9000,
+            "should find mate even with aspiration windows, got score {}",
+            result.score
+        );
+    }
+
+    #[test]
+    fn aspiration_score_is_finite_on_quiet_startpos() {
+        let board = Board::from_fen("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1")
+            .expect("valid FEN");
+        let result = search_iterative(&board, 5, 4);
+        assert!(result.best_move.is_some());
+        assert!(
+            result.score.abs() < 9000,
+            "score should be finite, not mate, got {}",
+            result.score
+        );
     }
 }
