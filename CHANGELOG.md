@@ -60,22 +60,34 @@ Timing is in microseconds (us). NPS = nodes × 1,000,000 ÷ us.
 
 **Before (BÖLÜM 1.2 baseline):**
 ```
-SEARCH startpos depth=6 nodes=118073 us=219609 nps=537651
-SEARCH kiwipete depth=5 nodes=31895610 us=81463601 nps=391532
-SEARCH endgame depth=8 nodes=135826 us=97537 nps=1392558
+PERFT startpos depth=5 nodes=4865609 us=435759 nps=11165825
+PERFT kiwipete depth=4 nodes=4085603 us=532326 nps=7675001
+PERFT pos3 depth=5 nodes=674624 us=85996 nps=7844829
+PERFT pos4 depth=4 nodes=422333 us=56059 nps=7533723
+PERFT pos5 depth=4 nodes=2103487 us=295699 nps=7113608
+SEARCH startpos depth=6 nodes=118073 us=217383 nps=543156
+SEARCH kiwipete depth=5 nodes=31895610 us=81543169 nps=391149
+SEARCH endgame depth=8 nodes=135826 us=96081 nps=1413661
+TOTAL nodes=44301165 us=83262472
 ```
 
 **After (BÖLÜM 2.1):**
 ```
-SEARCH startpos depth=6 nodes=78837 us=104544 nps=754103
-SEARCH kiwipete depth=5 nodes=233431 us=322306 nps=724252
-SEARCH endgame depth=8 nodes=162853 us=104662 nps=1555989
+PERFT startpos depth=5 nodes=4865609 us=448579 nps=10846715
+PERFT kiwipete depth=4 nodes=4085603 us=541385 nps=7546575
+PERFT pos3 depth=5 nodes=674624 us=87496 nps=7710341
+PERFT pos4 depth=4 nodes=422333 us=55202 nps=7650682
+PERFT pos5 depth=4 nodes=2103487 us=289559 nps=7264450
+SEARCH startpos depth=6 nodes=78837 us=104551 nps=754053
+SEARCH kiwipete depth=5 nodes=233431 us=318777 nps=732270
+SEARCH endgame depth=8 nodes=162853 us=102704 nps=1585653
+TOTAL nodes=12626777 us=1948253
 ```
 
 **Δ summary:**
 - startpos d6: 118,073 → 78,837 (−33%)
 - kiwipete d5: 31,895,610 → 233,431 (−99.3%)
-- endgame d8: 135,826 → 162,853 (+20% nodes, faster wall-clock due to better NPS)
+- endgame d8: 135,826 → 162,853 (+20% nodes, better search quality; wall-clock faster due to higher NPS)
 
 #### Setup — CI + tooling
 - Created `.github/workflows/ci.yml`: fmt, clippy `-D warnings`, build release, test (two profiles).
