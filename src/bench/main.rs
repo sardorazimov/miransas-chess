@@ -64,11 +64,10 @@ const SEARCH_POSITIONS: &[(&str, &str, u32)] = &[
 ];
 
 fn nps(nodes: u64, us: u128) -> String {
-    if us == 0 {
-        "inf".to_string()
-    } else {
-        ((nodes as u128 * 1_000_000 / us) as u64).to_string()
-    }
+    (nodes as u128 * 1_000_000)
+        .checked_div(us)
+        .map(|n| (n as u64).to_string())
+        .unwrap_or_else(|| "inf".to_string())
 }
 
 fn main() -> ExitCode {

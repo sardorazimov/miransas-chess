@@ -11,6 +11,8 @@ use crate::{
 };
 
 const NULL_MOVE_MIN_DEPTH: u32 = 3;
+const LMR_MIN_DEPTH: u32 = 3;
+const LMR_MIN_MOVE_INDEX: usize = 4;
 
 const CHECKMATE_SCORE: i32 = 100_000;
 const ASPIRATION_WINDOW: i32 = 50;
@@ -322,10 +324,30 @@ fn negamax(
         }
         let mv = moves[i];
 
+        // Determine LMR eligibility before making the move (needs pre-move board state).
+        let mv_is_capture = is_capture(board, &mv);
+        let mv_is_killer = ctx.is_killer(ply, mv);
+
+        let lmr_eligible = depth >= LMR_MIN_DEPTH
+            && i >= LMR_MIN_MOVE_INDEX
+            && ply > 0
+            && !in_check
+            && !mv_is_capture
+            && mv.promotion.is_none()
+            && !mv_is_killer;
+
+        let r = if lmr_eligible {
+            crate::search::lmr::lmr_table().reduction(depth as i32, i)
+        } else {
+            0i32
+        };
+
         let undo = board.make_move(mv);
-        let score = -negamax(
+
+        let new_depth = ((depth as i32) - 1 - r).max(0) as u32;
+        let mut score = -negamax(
             board,
-            depth - 1,
+            new_depth,
             ply + 1,
             -beta,
             -alpha,
@@ -335,6 +357,23 @@ fn negamax(
             tt,
             true,
         );
+
+        // Re-search at full depth when reduced search unexpectedly beats alpha.
+        if r > 0 && score > alpha {
+            score = -negamax(
+                board,
+                depth - 1,
+                ply + 1,
+                -beta,
+                -alpha,
+                nodes,
+                tt_hits,
+                ctx,
+                tt,
+                true,
+            );
+        }
+
         board.unmake_move(&undo);
 
         if score > best_score {
@@ -344,7 +383,7 @@ fn negamax(
         alpha = alpha.max(score);
 
         if alpha >= beta {
-            if !is_capture(board, &mv) && mv.promotion.is_none() {
+            if !mv_is_capture && mv.promotion.is_none() {
                 ctx.record_killer(ply, mv);
                 let attacker = board.squares[mv.from.index()].expect("piece at from after unmake");
                 let pi = piece_index(attacker.color, attacker.kind);
@@ -680,6 +719,31 @@ mod tests {
         assert!(
             generate_legal_moves(&board).contains(&result.best_move.unwrap()),
             "best move must be legal"
+        );
+    }
+
+    #[test]
+    fn lmr_search_returns_legal_move_on_startpos() {
+        let board = Board::startpos();
+        let result = search_iterative(&board, 6, 16);
+        assert!(result.best_move.is_some());
+        let mv = result.best_move.unwrap();
+        assert!(
+            generate_legal_moves(&board).contains(&mv),
+            "search returned illegal move"
+        );
+    }
+
+    #[test]
+    fn lmr_finds_mate_in_one() {
+        // White rook on e1, king on g1; black king on g8, pawns f7/g7/h7. Re8# is mate.
+        let board = Board::from_fen("6k1/5ppp/8/8/8/8/5PPP/4R1K1 w - - 0 1").expect("valid FEN");
+        let result = search_iterative(&board, 4, 4);
+        assert!(result.best_move.is_some());
+        assert!(
+            result.score > 9000,
+            "should find mate, got score {}",
+            result.score
         );
     }
 

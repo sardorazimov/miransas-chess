@@ -1,4 +1,5 @@
 pub mod context;
+pub mod lmr;
 pub mod negamax;
 pub mod ordering;
 pub mod tt;

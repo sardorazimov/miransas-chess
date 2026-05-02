@@ -38,11 +38,10 @@ pub fn run_bench(depth: u32) -> BenchResult {
     }
 
     let elapsed_ms = start.elapsed().as_millis();
-    let nps = if elapsed_ms == 0 {
-        total_nodes
-    } else {
-        ((total_nodes as u128 * 1000) / elapsed_ms) as u64
-    };
+    let nps = (total_nodes as u128 * 1000)
+        .checked_div(elapsed_ms)
+        .map(|n| n as u64)
+        .unwrap_or(total_nodes);
 
     BenchResult {
         positions,

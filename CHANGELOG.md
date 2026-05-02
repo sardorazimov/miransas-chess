@@ -131,6 +131,48 @@ TOTAL nodes=12486850 us=1767573
 - kiwipete d5: 233,431 → 220,502 (−6%; tactical complexity limits null move effectiveness)
 - endgame d8: 162,853 → 72,321 (−56%)
 
+#### BÖLÜM 2.3 — Late Move Reductions (LMR)
+- Added `src/search/lmr.rs`: `LmrTable` with Stockfish-style log formula `floor(0.75 + ln(d)*ln(m)/2.25)`, precomputed into a 64×64 table at startup via `OnceLock`.
+- LMR applied to quiet, non-killer moves at `depth >= 3` starting from move index 4 (`LMR_MIN_MOVE_INDEX`).
+- Re-search at full depth when reduced-depth score exceeds alpha (ensures tactics are not missed).
+- LMR excludes: captures, en passant, promotions, killer moves, in-check positions, root node (`ply == 0`).
+- **Known limitation**: Moves that give check are not yet excluded from LMR (detecting checks post-move requires making the move first). Will be revisited.
+- Added tests: `lmr_search_returns_legal_move_on_startpos`, `lmr_finds_mate_in_one`.
+- Total tests: 93.
+
+**Before (BÖLÜM 2.2):**
+```
+PERFT startpos depth=5 nodes=4865609 us=440089 nps=11055965
+PERFT kiwipete depth=4 nodes=4085603 us=518393 nps=7881285
+PERFT pos3 depth=5 nodes=674624 us=84894 nps=7946662
+PERFT pos4 depth=4 nodes=422333 us=54419 nps=7760763
+PERFT pos5 depth=4 nodes=2103487 us=285012 nps=7380345
+SEARCH startpos depth=6 nodes=42371 us=35155 nps=1205262
+SEARCH kiwipete depth=5 nodes=220502 us=306317 nps=719849
+SEARCH endgame depth=8 nodes=72321 us=43294 nps=1670462
+TOTAL nodes=12486850 us=1767573
+```
+
+**After (BÖLÜM 2.3):**
+```
+PERFT startpos depth=5 nodes=4865609 us=417738 nps=11647513
+PERFT kiwipete depth=4 nodes=4085603 us=518483 nps=7879916
+PERFT pos3 depth=5 nodes=674624 us=85039 nps=7933113
+PERFT pos4 depth=4 nodes=422333 us=55174 nps=7654565
+PERFT pos5 depth=4 nodes=2103487 us=284538 nps=7392639
+SEARCH startpos depth=6 nodes=19794 us=23642 nps=837238
+SEARCH kiwipete depth=5 nodes=168992 us=289772 nps=583189
+SEARCH endgame depth=8 nodes=22987 us=18362 nps=1251878
+TOTAL nodes=12363429 us=1692748
+```
+
+**Δ summary:**
+- startpos d6: 42,371 → 19,794 (−53%)
+- kiwipete d5: 220,502 → 168,992 (−23%)
+- endgame d8: 72,321 → 22,987 (−68%)
+- Cumulative since BÖLÜM 1.2 baseline (search nodes total):
+  - 32,149,509 (1.2) → 211,773 (2.3) (−99.3%)
+
 ---
 
 #### Setup — CI + tooling
