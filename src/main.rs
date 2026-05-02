@@ -310,11 +310,10 @@ fn json_escape(input: &str) -> String {
 }
 
 fn nodes_per_second(nodes: u64, elapsed_ms: u128) -> u64 {
-    if elapsed_ms == 0 {
-        nodes
-    } else {
-        ((nodes as u128 * 1000) / elapsed_ms) as u64
-    }
+    (nodes as u128 * 1000)
+        .checked_div(elapsed_ms)
+        .map(|n| n as u64)
+        .unwrap_or(nodes)
 }
 
 fn print_usage() {

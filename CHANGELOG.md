@@ -173,6 +173,9 @@ TOTAL nodes=12363429 us=1692748
 - Cumulative since BÖLÜM 1.2 baseline (search nodes total):
   - 32,149,509 (1.2) → 211,773 (2.3) (−99.3%)
 
+**Fix (CI):**
+- Refactored three division-by-zero guards to use `u128::checked_div` instead of manual `if x == 0` pattern. Clippy 1.95 introduced `manual_checked_ops` lint which flagged these. Behavior unchanged.
+
 ---
 
 #### Setup — CI + tooling
