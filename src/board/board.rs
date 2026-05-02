@@ -20,6 +20,12 @@ pub struct Board {
 }
 
 #[derive(Clone, Copy, Debug)]
+pub struct NullUndo {
+    pub prev_en_passant: Option<Square>,
+    pub prev_zobrist_key: u64,
+}
+
+#[derive(Clone, Copy, Debug)]
 pub struct Undo {
     pub mv: crate::movegen::Move,
     pub captured: Option<Piece>,
@@ -211,6 +217,41 @@ impl Board {
         }
     }
 
+    /// Returns true if the side to move has only king and pawns (zugzwang-prone).
+    pub fn side_to_move_has_only_pawns(&self) -> bool {
+        for piece in self.squares.iter().flatten() {
+            if piece.color != self.side_to_move {
+                continue;
+            }
+            match piece.kind {
+                PieceKind::King | PieceKind::Pawn => continue,
+                _ => return false,
+            }
+        }
+        true
+    }
+
+    pub fn make_null_move(&mut self) -> NullUndo {
+        let undo = NullUndo {
+            prev_en_passant: self.en_passant,
+            prev_zobrist_key: self.zobrist_key,
+        };
+        let z = crate::search::zobrist();
+        self.zobrist_key = z.toggle_side_to_move(self.zobrist_key);
+        self.side_to_move = self.side_to_move.opposite();
+        if let Some(ep) = self.en_passant {
+            self.zobrist_key = z.toggle_en_passant(self.zobrist_key, ep);
+            self.en_passant = None;
+        }
+        undo
+    }
+
+    pub fn unmake_null_move(&mut self, undo: NullUndo) {
+        self.side_to_move = self.side_to_move.opposite();
+        self.en_passant = undo.prev_en_passant;
+        self.zobrist_key = undo.prev_zobrist_key;
+    }
+
     pub fn unmake_move(&mut self, undo: &Undo) {
         let mv = undo.mv;
 
@@ -369,6 +410,48 @@ mod tests {
 
         assert!(!capture.castling_rights.white_kingside);
         assert!(capture.castling_rights.white_queenside);
+    }
+
+    #[test]
+    fn pawns_only_detection() {
+        let kp = Board::from_fen("4k3/pppppppp/8/8/8/8/PPPPPPPP/4K3 w - - 0 1").expect("valid FEN");
+        assert!(kp.side_to_move_has_only_pawns());
+
+        let kn =
+            Board::from_fen("4k3/pppppppp/8/8/8/8/PPPPPPPP/N3K3 w - - 0 1").expect("valid FEN");
+        assert!(!kn.side_to_move_has_only_pawns());
+
+        let start = Board::startpos();
+        assert!(!start.side_to_move_has_only_pawns());
+    }
+
+    #[test]
+    fn null_move_is_reversible() {
+        let mut board = Board::startpos();
+        let snapshot = board.clone();
+        let undo = board.make_null_move();
+        assert_ne!(board.zobrist_key, snapshot.zobrist_key);
+        assert_ne!(board.side_to_move, snapshot.side_to_move);
+        board.unmake_null_move(undo);
+        assert_eq!(board, snapshot);
+        assert_eq!(board.zobrist_key, snapshot.zobrist_key);
+    }
+
+    #[test]
+    fn null_move_clears_en_passant_and_restores_it() {
+        let mut board =
+            Board::from_fen("rnbqkbnr/pppp1ppp/8/4pP2/8/8/PPPPP1PP/RNBQKBNR w KQkq e6 0 2")
+                .expect("valid FEN with en passant");
+        let snapshot = board.clone();
+        assert!(snapshot.en_passant.is_some());
+        let undo = board.make_null_move();
+        assert!(
+            board.en_passant.is_none(),
+            "en passant must be cleared after null move"
+        );
+        board.unmake_null_move(undo);
+        assert_eq!(board.en_passant, snapshot.en_passant);
+        assert_eq!(board.zobrist_key, snapshot.zobrist_key);
     }
 
     #[test]

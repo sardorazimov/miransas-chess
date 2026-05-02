@@ -89,6 +89,50 @@ TOTAL nodes=12626777 us=1948253
 - kiwipete d5: 31,895,610 → 233,431 (−99.3%)
 - endgame d8: 135,826 → 162,853 (+20% nodes, better search quality; wall-clock faster due to higher NPS)
 
+#### BÖLÜM 2.2 — Null move pruning
+- Added `Board::make_null_move` / `unmake_null_move` with full incremental Zobrist updates (side-to-move toggle, en-passant clear).
+- Added `Board::side_to_move_has_only_pawns` for zugzwang avoidance (skips null move when the side to move has only king + pawns).
+- Added `NullUndo` struct (returned by `make_null_move`, consumed by `unmake_null_move`).
+- Null move pruning in `negamax`: applies when `depth >= 3`, not in check, not pawns-only position, `ply > 0`, and `null_allowed == true`.
+- Adaptive R: `depth > 6` → R=3, otherwise R=2.
+- Null window search around beta: `(-beta, -beta+1)`.
+- Added `null_allowed: bool` parameter to `negamax`; stacked null moves are prevented by passing `false` in the recursive null-move call; all other recursive calls pass `true`.
+- Added tests: `pawns_only_detection`, `null_move_is_reversible`, `null_move_clears_en_passant_and_restores_it`, `null_move_finds_same_best_move_as_baseline_on_kiwipete`.
+- Total tests: 88.
+
+**Before (BÖLÜM 2.1):**
+```
+PERFT startpos depth=5 nodes=4865609 us=448579 nps=10846715
+PERFT kiwipete depth=4 nodes=4085603 us=541385 nps=7546575
+PERFT pos3 depth=5 nodes=674624 us=87496 nps=7710341
+PERFT pos4 depth=4 nodes=422333 us=55202 nps=7650682
+PERFT pos5 depth=4 nodes=2103487 us=289559 nps=7264450
+SEARCH startpos depth=6 nodes=78837 us=104551 nps=754053
+SEARCH kiwipete depth=5 nodes=233431 us=318777 nps=732270
+SEARCH endgame depth=8 nodes=162853 us=102704 nps=1585653
+TOTAL nodes=12626777 us=1948253
+```
+
+**After (BÖLÜM 2.2):**
+```
+PERFT startpos depth=5 nodes=4865609 us=440089 nps=11055965
+PERFT kiwipete depth=4 nodes=4085603 us=518393 nps=7881285
+PERFT pos3 depth=5 nodes=674624 us=84894 nps=7946662
+PERFT pos4 depth=4 nodes=422333 us=54419 nps=7760763
+PERFT pos5 depth=4 nodes=2103487 us=285012 nps=7380345
+SEARCH startpos depth=6 nodes=42371 us=35155 nps=1205262
+SEARCH kiwipete depth=5 nodes=220502 us=306317 nps=719849
+SEARCH endgame depth=8 nodes=72321 us=43294 nps=1670462
+TOTAL nodes=12486850 us=1767573
+```
+
+**Δ summary:**
+- startpos d6: 78,837 → 42,371 (−46%)
+- kiwipete d5: 233,431 → 220,502 (−6%; tactical complexity limits null move effectiveness)
+- endgame d8: 162,853 → 72,321 (−56%)
+
+---
+
 #### Setup — CI + tooling
 - Created `.github/workflows/ci.yml`: fmt, clippy `-D warnings`, build release, test (two profiles).
 - Rewrote `README.md` with current feature list, usage examples, and project structure.

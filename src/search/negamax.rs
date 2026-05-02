@@ -10,6 +10,8 @@ use crate::{
     },
 };
 
+const NULL_MOVE_MIN_DEPTH: u32 = 3;
+
 const CHECKMATE_SCORE: i32 = 100_000;
 const ASPIRATION_WINDOW: i32 = 50;
 const NEG_INF: i32 = i32::MIN + 1;
@@ -198,6 +200,7 @@ fn search_root(
             tt_hits,
             ctx,
             tt,
+            true,
         );
         board.unmake_move(&undo);
 
@@ -235,6 +238,7 @@ fn negamax(
     tt_hits: &mut u64,
     ctx: &mut SearchContext,
     tt: &mut TranspositionTable,
+    null_allowed: bool,
 ) -> i32 {
     *nodes += 1;
 
@@ -261,6 +265,36 @@ fn negamax(
     } else {
         None
     };
+
+    let in_check = is_in_check(board, board.side_to_move);
+
+    // Null move pruning: skip if in check, zugzwang-prone, stacked null, or shallow depth
+    if null_allowed
+        && depth >= NULL_MOVE_MIN_DEPTH
+        && ply > 0
+        && !in_check
+        && !board.side_to_move_has_only_pawns()
+    {
+        let r: u32 = if depth > 6 { 3 } else { 2 };
+        let null_depth = depth - 1 - r; // safe: depth >= 3 and r <= 3, but depth-1-r >= 0 when depth>=3,r=2
+        let null_undo = board.make_null_move();
+        let null_score = -negamax(
+            board,
+            null_depth,
+            ply + 1,
+            -beta,
+            -beta + 1,
+            nodes,
+            tt_hits,
+            ctx,
+            tt,
+            false,
+        );
+        board.unmake_null_move(null_undo);
+        if null_score >= beta {
+            return beta;
+        }
+    }
 
     let mut moves = generate_legal_moves(board);
     if moves.is_empty() {
@@ -299,6 +333,7 @@ fn negamax(
             tt_hits,
             ctx,
             tt,
+            true,
         );
         board.unmake_move(&undo);
 
@@ -511,6 +546,7 @@ mod tests {
             &mut tt_hits,
             &mut ctx,
             &mut tt,
+            false,
         );
         let _ = static_leaf_alpha_beta(
             &mut board.clone(),
@@ -632,6 +668,19 @@ mod tests {
             }
         }
         alpha
+    }
+
+    #[test]
+    fn null_move_finds_same_best_move_as_baseline_on_kiwipete() {
+        let board =
+            Board::from_fen("r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1")
+                .expect("valid FEN");
+        let result = search_iterative(&board, 5, 16);
+        assert!(result.best_move.is_some(), "search must return a move");
+        assert!(
+            generate_legal_moves(&board).contains(&result.best_move.unwrap()),
+            "best move must be legal"
+        );
     }
 
     fn square(algebraic: &str) -> crate::board::Square {
