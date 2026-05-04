@@ -223,6 +223,32 @@ TOTAL nodes=12358890 us=1730789
 
 ---
 
+### FAZ 3 — Move Generation Optimization
+
+#### BÖLÜM 3.1 — Pin & Checker Detection
+- Added `src/movegen/checks.rs` with `CheckerInfo`, `PinMask`, `find_checkers`, `compute_pin_mask`.
+- Lazy computation: pin and checker info is computed on demand by helper functions, not stored on `Board`. This will be revisited in FAZ 6 when bitboards arrive.
+- `find_checkers` returns 0, 1, or 2 checking squares — sufficient for distinguishing single and double check, which determines what evasion moves are legal.
+- `compute_pin_mask` records, for each pinned friendly piece, the direction of its pin ray (normalized unit vector from king toward pinner).
+- Knights and pawns cannot pin (don't slide). Two pieces between slider and king means no pin. Enemy piece breaking the ray means no pin.
+- 14 unit tests covering: no checks, checks by each piece type, double check, pins by rook/bishop/queen, knights don't pin, two-blocker no-pin, enemy blocker no-pin, pin ray normalization.
+- BEHAVIOR UNCHANGED: existing filter-based legal move generation still in use. Bench output identical to BÖLÜM 2.4.
+
+**Bench output (unchanged from BÖLÜM 2.4):**
+```
+PERFT startpos depth=5 nodes=4865609 us=499834 nps=9734449
+PERFT kiwipete depth=4 nodes=4085603 us=564956 nps=7231718
+PERFT pos3 depth=5 nodes=674624 us=89980 nps=7497488
+PERFT pos4 depth=4 nodes=422333 us=58223 nps=7253714
+PERFT pos5 depth=4 nodes=2103487 us=303601 nps=6928458
+SEARCH startpos depth=6 nodes=14791 us=23605 nps=626604
+SEARCH kiwipete depth=5 nodes=169474 us=306548 nps=552846
+SEARCH endgame depth=8 nodes=22969 us=20979 nps=1094856
+TOTAL nodes=12358890 us=1867726
+```
+
+---
+
 #### Setup — CI + tooling
 - Created `.github/workflows/ci.yml`: fmt, clippy `-D warnings`, build release, test (two profiles).
 - Rewrote `README.md` with current feature list, usage examples, and project structure.
